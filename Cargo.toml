@@ -10,3 +10,10 @@ rand = "0.8.4"
 image = "0.24.5"
 serde_json = "1.0.70"
 serde = { version = "1.0.130", features = ["derive"] }
+aws-config = "^0.3"
+aws-sdk-dynamodb = "^0.3"
+tokio = {versopm = "1", features = ["full"]}
+lambda_runtime
+log
+simple_logger
+uuid = {version = "^0.8"}

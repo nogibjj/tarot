@@ -3,6 +3,20 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use rand::seq::SliceRandom;
 use image::{DynamicImage, GenericImageView};
+use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_dynamodb::Client;
+use aws_sdk_dynamodb::model::AttributeValue;
+use lambda_runtime::{handler_fn, Context, Error as LambdaError};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+#[tokio::main]
+async fn main () -> Result < (), LambdaError > {
+    let func = handler_fn ( handler ) ;
+    lambda_runtime :: run ( func ) . await ? ;
+    Ok ( () )
+}
 
 #[derive(Debug)]
 struct Card {
@@ -11,101 +25,65 @@ struct Card {
     fortune_telling: Vec<String>,
 }
 
-impl Clone for Card {
-    fn clone(&self) -> Self {
-        Card {
-            name: self.name.clone(),
-            img_path: self.img_path.clone(),
-            fortune_telling: self.fortune_telling.clone(),
-        }
-    }
+#[derive(Deserialize)]
+struct Request {
+    name: String,
 }
 
-impl Card {
-    fn new(name: String, img_path: String, fortune_telling: Vec<String>) -> Card {
-        Card { name, img_path, fortune_telling }
-    }
-    fn from_csv_line(line: &str) -> Option<Card> {
-        let values: Vec<&str> = line.trim().split(",").collect();
-        if values.len() == 4 {
-            Some(Card::new(
-                String::from(values[0]),
-                String::from(values[1]),
-                vec![
-                    String::from(values[2]),
-                    String::from(values[3]),
-                ],
-            ))
-        } else {
-            None
-        }
-    }
-    // showing the image from archive cards
+aysnc fn handler ( event: Value , _ctx: Context ) -> Result < Value , LambdaError > {
+    let request: Request = serde_json :: from_value ( event ) ? ;
+    let mut rng = rand :: thread_rng ( ) ;
+    let mut cards = Vec :: new ( ) ;
+    let mut fortunes = Vec :: new ( ) ;
+    let mut card = Card {
+        name: String :: new ( ) ,
+        img_path: String :: new ( ) ,
+        fortune_telling: Vec :: new ( ) ,
+    } ;
 
-    fn show_image(&self) -> Option<DynamicImage> {
-        match image::open(&self.img_path) {
-            Ok(img) => Some(img),
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                None
-            }
-        }
+    let file = File :: open ( "cards.txt" ) ? ;
+    let reader = BufReader :: new ( file ) ;
+    for line in reader.lines ( ) {
+        let line = line ? ;
+        let mut split = line.split ( "," ) ;
+        card.name = split . next ( ) . unwrap ( ) . to_string ( ) ;
+        card.img_path = split . next ( ) . unwrap ( ) . to_string ( ) ;
+        card.fortune_telling = split . map ( | s | s . to_string ( ) ) . collect ( ) ;
+        cards . push ( card . clone ( ) ) ;
     }
-}
 
-fn read_cards_from_csv(csv_path: &str) -> Vec<Card> {
-    let file = match File::open(csv_path) {
-        Ok(file) => file,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            process::exit(1);
-        }
+    let card = cards . choose ( & mut rng ) . unwrap ( ) ;
+    let fortune = card . fortune_telling . choose ( & mut rng ) . unwrap ( ) ;
+
+    let region_provider = RegionProviderChain :: default_provider ( ) . or_else ( "ap-northeast-1" ) ? ;
+    let client = Client :: new ( & region_provider ) ;
+    let mut item = std :: collections :: HashMap :: new ( ) ;
+    item . insert ( "id" . to_string ( ) , AttributeValue :: s ( Uuid :: new_v4 ( ) . to_string ( ) ) ) ;
+    item . insert ( "name" . to_string ( ) , AttributeValue :: s ( request . name ) ) ;
+    item . insert ( "fortune" . to_string ( ) , AttributeValue :: s ( fortune . to_string ( ) ) ) ;
+    let input = aws_sdk_dynamodb :: model :: PutItemInput {
+        table_name: "fortune-telling".to_string(),
+        item,
+        ..Default::default()
     };
+    let _ = client.put_item(input).await?;
 
-    let reader = BufReader::new(file);
-    reader
-        .lines()
-        .filter_map(|line| Card::from_csv_line(&line.unwrap()))
-        .collect()
+    let img = image::open(card.img_path)?;
+    let mut img_buf = Vec::new();
+    img.write_to
+    let img = image::open(card.img_path)?;
+    let mut img_buf = Vec::new();
+    img.write_to(&mut img_buf, image::ImageOutputFormat::Png)?;
+    let img_base64 = base64::encode(img_buf);
+
+    request.send().await?;
+
+    Ok(json!({
+        "fortune": fortune,
+        "img": img_base64,
+    }))
+
 }
 
-fn main() {
-    let cards = read_cards_from_csv("tarot.csv");
 
-    let mut rng = rand::thread_rng();
-    let chosen_cards = cards
-        .choose_multiple(&mut rng, 3)
-        .cloned()
-        .collect::<Vec<Card>>();
 
-    for card in &chosen_cards {
-        println!("
-
-{}", card.name);
-
-        if let Some(img) = card.show_image() {
-            let (width, height) = img.dimensions();
-            let resized_img = img.resize(width / 2, height / 2, image::imageops::FilterType::Nearest);
-            resized_img.save("card.png").unwrap();
-            println!("
-
-{}", card.fortune_telling[0]);
-            println!("
-
-{}", card.fortune_telling[1]);
-        }
-    }
-}
-
-// create a web app
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-
-async fn index() -> impl Responder {
-    HttpResponse::Ok().body("Hello world!")
-}
-
-#[actix_rt::main]
-async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| App::new().route("/", web::get().to(index)))
-        .bind("
-        
